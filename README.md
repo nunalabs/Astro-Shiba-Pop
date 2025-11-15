@@ -114,6 +114,22 @@ Ver [ARCHITECTURE.md](./ARCHITECTURE.md) para detalles completos.
 
 ## 📚 Documentación
 
+### 🚀 Deployment (Empezar Aquí)
+
+- **[VERCEL_SETUP_GUIDE.md](./VERCEL_SETUP_GUIDE.md)** - **⭐ DEPLOY FRONTEND AHORA**
+  - Guía paso a paso con imágenes textuales
+  - Solución al error de pnpm version
+  - 3 métodos de deployment diferentes
+  - Troubleshooting completo
+  - **Úsala si quieres deployar a Vercel YA**
+
+- **[DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)** - Guía completa de deployment
+  - Setup paso a paso completo
+  - Deployment de contratos a testnet
+  - Configuración de backend y frontend
+  - Testing end-to-end
+  - **Úsala para deployment full-stack**
+
 ### Documentos de Investigación y Diseño
 
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Arquitectura completa del sistema (60+ páginas)
@@ -121,13 +137,6 @@ Ver [ARCHITECTURE.md](./ARCHITECTURE.md) para detalles completos.
   - Stack tecnológico completo
   - Modelo de negocio y tokenomics
   - Roadmap detallado por fases
-
-- **[DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)** - **⭐ EMPEZAR AQUÍ** - Guía de deployment
-  - Setup paso a paso completo
-  - Deployment de contratos a testnet
-  - Configuración de backend y frontend
-  - Testing end-to-end
-  - Troubleshooting común
 
 - **[TECH_IMPLEMENTATION_PLAN.md](./TECH_IMPLEMENTATION_PLAN.md)** - Plan técnico de implementación
   - Estructura del proyecto completa
