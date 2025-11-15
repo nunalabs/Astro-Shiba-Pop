@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { formatNumber } from '@/lib/utils';
 import { TrendingUp } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
 const TRENDING_TOKENS_QUERY = gql`
   query TrendingTokens {
@@ -23,7 +24,15 @@ const TRENDING_TOKENS_QUERY = gql`
 `;
 
 export function TrendingTokens() {
-  const { data, loading } = useQuery(TRENDING_TOKENS_QUERY);
+  const [isClient, setIsClient] = useState(false);
+
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
+
+  const { data, loading } = useQuery(TRENDING_TOKENS_QUERY, {
+    skip: !isClient, // Skip query during SSR/SSG
+  });
 
   if (loading) {
     return (
