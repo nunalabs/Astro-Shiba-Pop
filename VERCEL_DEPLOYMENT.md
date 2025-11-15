@@ -7,41 +7,37 @@ This guide explains how to deploy the AstroShibaPop frontend to Vercel.
 - A Vercel account (sign up at [vercel.com](https://vercel.com))
 - Git repository connected to Vercel
 
-## Configuration Overview
+## ⚠️ Important: Monorepo Configuration
 
-The project is configured with:
-- **Package Manager**: pnpm 8.15.0 (via Corepack)
-- **Framework**: Next.js 14
-- **Node Version**: 20.11.0
-- **Monorepo**: Turborepo workspace
+This project uses a pnpm monorepo structure. To deploy only the frontend to Vercel, you MUST configure the **Root Directory** setting to point to the `frontend` subdirectory. This avoids workspace dependency issues.
 
-## Option 1: Deploy from Vercel Dashboard (Recommended)
+## ✅ Recommended: Deploy from Frontend Subdirectory
 
 ### Step 1: Import Project
 
 1. Go to [vercel.com/new](https://vercel.com/new)
-2. Import your Git repository
-3. Click "Import"
+2. Select your Git provider (GitHub/GitLab/Bitbucket)
+3. Import the `Astro-Shiba-Pop` repository
+4. Click "Import"
 
-### Step 2: Configure Project Settings
+### Step 2: Configure Project Settings ⚠️ CRITICAL
 
-**Root Directory**:
-- Select "Edit" next to Root Directory
-- Set to: `frontend`
-- This tells Vercel to use the frontend subdirectory as the project root
+**🔴 Root Directory** (MOST IMPORTANT):
+1. Click "Edit" next to "Root Directory"
+2. Type: `frontend`
+3. This tells Vercel to treat `frontend/` as the project root
+4. **This avoids all monorepo/pnpm workspace issues**
 
 **Framework Preset**:
-- Should auto-detect as "Next.js"
+- Should auto-detect as "Next.js" ✅
 - If not, manually select "Next.js"
 
-**Build Settings**:
-- Leave as default (Vercel will use the commands from the frontend/package.json)
-- Build Command: `next build`
-- Output Directory: `.next`
-- Install Command: `pnpm install`
+**Build & Development Settings**:
+- Build Command: (leave default) `npm run build`
+- Output Directory: (leave default) `.next`
+- Install Command: (leave default) `npm install`
 
-**Node Version**:
-- Will use Node 20.x automatically from `.node-version` file
+> **Note**: Vercel will automatically use npm instead of pnpm when deploying from the `frontend` subdirectory, which is perfect since it's self-contained with no workspace dependencies.
 
 ### Step 3: Configure Environment Variables
 
@@ -65,72 +61,75 @@ NEXT_PUBLIC_API_URL=http://localhost:4000/graphql
 
 ### Step 4: Deploy
 
-1. Click "Deploy"
-2. Wait for the build to complete
+1. Click "Deploy" 🚀
+2. Wait for the build to complete (usually 2-3 minutes)
 3. Visit your deployment URL
+4. Test the application
 
-## Option 2: Deploy from CLI
+**Expected Build Output:**
+```
+✓ Cloning repository
+✓ Installing dependencies (npm install)
+✓ Building Next.js application
+✓ Deployment successful
+```
+
+## Alternative: Deploy from Vercel CLI
 
 ```bash
 # Install Vercel CLI
 npm i -g vercel
 
-# Login to Vercel
-vercel login
+# Navigate to frontend directory
+cd frontend
 
-# From project root, deploy
+# Deploy
 vercel
 
 # Follow the prompts:
-# - Set root directory to: frontend
-# - Confirm framework preset: Next.js
+# - Confirm settings
 # - Configure environment variables when prompted
 ```
 
-## Option 3: Deploy Monorepo Root (Advanced)
-
-If you want to deploy from the monorepo root:
-
-1. **In Vercel Dashboard**:
-   - Root Directory: Leave as `./` (project root)
-   - Override Build Command: Enable
-   - Build Command: `pnpm --filter=frontend build`
-   - Override Install Command: Enable
-   - Install Command: `corepack enable && pnpm install`
-
-2. **Environment Variables**: Same as Option 1
+**For subsequent deployments:**
+```bash
+cd frontend
+vercel --prod
+```
 
 ## Troubleshooting
 
 ### Error: "Unsupported environment (bad pnpm version)"
 
+**Solution**: ✅ Set Root Directory to `frontend` in Vercel dashboard
+- This is the most common issue
+- Deploying from the frontend subdirectory avoids all pnpm/monorepo issues
+- Vercel will use npm automatically
+
+### Error: Build fails with "Cannot find module"
+
+**Possible causes**:
+1. Root Directory not set correctly → Set to `frontend`
+2. Missing environment variables → Add `NEXT_PUBLIC_API_URL`
+3. Node version mismatch → Vercel uses Node 20.x by default (correct)
+
 **Solution**:
-- Make sure `packageManager` field is set in root `package.json` (already configured)
-- Vercel should use Corepack to install pnpm 8.15.0 automatically
-- If still failing, try Option 1 (deploy from `frontend` directory)
+```
+1. Verify Root Directory = "frontend"
+2. Check Build Logs in Vercel dashboard
+3. Ensure all environment variables are set
+```
 
-### Error: "Cannot find module '@astroshibapop/shared-types'"
+### Error: "ENOENT: no such file or directory"
 
-**Solution**:
-- This happens when deploying from `frontend` root directory
-- The frontend depends on the workspace package `@astroshibapop/shared-types`
-- **Option A**: Copy `packages/shared-types` into `frontend/src/types` and update imports
-- **Option B**: Deploy from monorepo root using Option 3
-- **Option C**: Use Vercel's monorepo support (see below)
+**Solution**: Make sure Root Directory is set to `frontend`, not `./` or blank
 
-### Using Vercel Monorepo Support
+### Build succeeds but site doesn't work
 
-Vercel has beta support for Turborepo monorepos:
-
-1. Install Turbo globally in your Vercel project:
-   ```bash
-   vercel env add TURBO_TOKEN
-   vercel env add TURBO_TEAM
-   ```
-
-2. Configure in Vercel Dashboard:
-   - Enable "Include source files outside of the Root Directory"
-   - This allows access to workspace dependencies
+**Check**:
+1. Environment variables are set (especially `NEXT_PUBLIC_API_URL`)
+2. The API URL is accessible from the internet (not localhost)
+3. Browser console for errors (F12 → Console)
 
 ## Frontend-Only Deployment (Current Setup)
 
@@ -187,34 +186,50 @@ NEXT_PUBLIC_AMM_ROUTER_CONTRACT=CXXXX...
 NEXT_PUBLIC_GOOGLE_ANALYTICS=G-XXXXXXXXXX
 ```
 
-## Vercel Deployment Checklist
+## 📋 Vercel Deployment Checklist
 
+Before deploying:
 - [ ] Repository connected to Vercel
-- [ ] Root directory set to `frontend` (Option 1) OR monorepo config (Option 3)
-- [ ] Framework preset: Next.js
-- [ ] Node version: 20.x (auto-detected from `.node-version`)
-- [ ] Environment variables configured
-- [ ] Backend API deployed (if needed for production)
-- [ ] Smart contracts deployed to testnet
-- [ ] First deployment successful
-- [ ] Preview deployments working
+- [ ] **Root Directory set to `frontend`** ⚠️ CRITICAL
+- [ ] Framework preset: Next.js (auto-detected)
+- [ ] Environment variable `NEXT_PUBLIC_NETWORK=testnet` added
+- [ ] Environment variable `NEXT_PUBLIC_API_URL` added (can be placeholder for now)
 
-## Next Steps After Deployment
+After first deployment:
+- [ ] First deployment successful ✅
+- [ ] All pages accessible (Home, Create, Swap, Pools, Tokens, Leaderboard)
+- [ ] Freighter wallet connection working
+- [ ] Preview deployments enabled for PRs
 
-1. **Test the deployment**: Visit your Vercel URL
-2. **Connect Freighter Wallet**: Test wallet connection
-3. **Verify all pages load**: Home, Create, Swap, Pools, Tokens, Leaderboard
-4. **Set up custom domain** (optional): Configure in Vercel dashboard
-5. **Enable preview deployments**: Automatic PR previews
-6. **Set up monitoring**: Vercel Analytics, Web Vitals
+## 🎉 Next Steps After Deployment
 
-## Support
+1. **Test the deployment**: Visit your Vercel URL (e.g., `https://astro-shiba-pop.vercel.app`)
+2. **Verify all pages**:
+   - ✅ Home page with stats
+   - ✅ Create Token page
+   - ✅ Swap interface
+   - ✅ Pools page
+   - ✅ Tokens listing
+   - ✅ Leaderboard
+3. **Test Freighter wallet**: Click "Connect Wallet" button
+4. **Custom domain** (optional): Add in Vercel dashboard → Settings → Domains
+5. **Preview deployments**: Enabled automatically for all PRs
+6. **Monitoring**: Enable Vercel Analytics and Speed Insights
 
-- Vercel Documentation: https://vercel.com/docs
-- Next.js Documentation: https://nextjs.org/docs
-- Turborepo Documentation: https://turbo.build/repo/docs
-- AstroShibaPop Issues: https://github.com/nunalabs/Astro-Shiba-Pop/issues
+## 📚 Additional Resources
+
+- **Vercel Docs**: https://vercel.com/docs
+- **Next.js Docs**: https://nextjs.org/docs
+- **Full Deployment Guide**: See `DEPLOYMENT_GUIDE.md` for backend + contracts
+- **Issues**: https://github.com/nunalabs/Astro-Shiba-Pop/issues
 
 ---
 
-**Need Help?** Check the main `DEPLOYMENT_GUIDE.md` for complete deployment instructions including backend and contracts.
+## 🚨 Quick Reference
+
+**Most Common Fix**: If deployment fails with pnpm errors:
+```
+Vercel Dashboard → Settings → Root Directory → Set to "frontend" → Save
+```
+
+**Current Status**: Frontend can be deployed standalone with mock data. For full functionality, deploy backend and smart contracts separately (see `DEPLOYMENT_GUIDE.md`).

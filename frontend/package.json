@@ -10,7 +10,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@astroshibapop/shared-types": "workspace:*",
     "@apollo/client": "^3.9.0",
     "@freighter-api/types": "^1.7.0",
     "@radix-ui/react-dialog": "^1.0.5",
