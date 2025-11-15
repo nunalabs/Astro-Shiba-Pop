@@ -3,6 +3,7 @@
 import { useQuery, gql } from '@apollo/client';
 import { Card, CardContent } from '@/components/ui/card';
 import { formatNumber } from '@/lib/utils';
+import { useEffect, useState } from 'react';
 
 const GLOBAL_STATS_QUERY = gql`
   query GlobalStats {
@@ -17,8 +18,15 @@ const GLOBAL_STATS_QUERY = gql`
 `;
 
 export function Stats() {
+  const [isClient, setIsClient] = useState(false);
+
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
+
   const { data, loading } = useQuery(GLOBAL_STATS_QUERY, {
     pollInterval: 30000, // Refresh every 30s
+    skip: !isClient, // Skip query during SSR/SSG
   });
 
   const stats = [
