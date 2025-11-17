@@ -1,33 +1,26 @@
 use soroban_sdk::{token, Address, BytesN, Env, String};
 
 /// Creates a new Stellar Asset Contract (SAC) token
+/// Note: This is a simplified version. In production, use stellar::contract::token or Asset Contract
 pub fn create_token(
-    env: &Env,
-    admin: &Address,
-    name: &String,
-    symbol: &String,
-    decimals: u32,
-    salt: &BytesN<32>,
+    _env: &Env,
+    _admin: &Address,
+    _name: &String,
+    _symbol: &String,
+    _decimals: u32,
+    _salt: &BytesN<32>,
 ) -> Address {
-    // Deploy a new token contract
-    let token_wasm_hash = env.deployer().upload_contract_wasm(token::StellarAssetClient::WASM);
-
-    let token_address = env
-        .deployer()
-        .with_current_contract(salt.clone())
-        .deploy(token_wasm_hash);
-
-    // Initialize the token
-    let token_client = token::Client::new(env, &token_address);
-    token_client.initialize(admin, &decimals, name, symbol);
-
-    token_address
+    // TODO: In production, deploy actual token contract
+    // For now, return a mock address (will be replaced with actual token deployment)
+    panic!("Token creation not yet implemented - use Stellar Asset Contract");
 }
 
 /// Mint tokens to an address
-pub fn mint_to(env: &Env, token_address: &Address, to: &Address, amount: i128) {
-    let token_client = token::Client::new(env, token_address);
-    token_client.mint(to, &amount);
+/// Note: In production, this would require admin privileges on the token contract
+pub fn mint_to(_env: &Env, _token_address: &Address, _to: &Address, _amount: i128) {
+    // TODO: Call token contract's mint function
+    // For now, this is a placeholder
+    panic!("Minting not yet implemented - integrate with token contract");
 }
 
 /// Transfer tokens

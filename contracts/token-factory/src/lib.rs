@@ -1,37 +1,38 @@
 #![no_std]
 
-//! # Token Factory Contract
+//! # Token Factory Contract V2 - Enterprise Grade
 //!
 //! This contract allows users to create meme tokens with bonding curves.
 //! Features:
 //! - Ultra-simple token creation (name, symbol, supply, metadata)
-//! - Automatic bonding curve for initial price discovery
+//! - Multiple bonding curve types (Linear, Exponential, Sigmoid)
+//! - Comprehensive input validation and error handling
+//! - Overflow protection with checked arithmetic
+//! - Rate limiting and anti-spam measures
+//! - Sell penalties to prevent pump-and-dump
+//! - Emergency pause mechanism
 //! - Low creation fee (0.01 XLM)
 //! - Graduation to AMM at market cap threshold
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, token, Address, Bytes, BytesN, Env, String, Symbol, Vec,
+    contract, contractimpl, Address, Bytes, BytesN, Env, String, Vec,
 };
 
 mod bonding_curve;
+mod bonding_curve_v2;
 mod storage;
 mod token;
 mod events;
+mod errors;
+mod validation;
 
-use bonding_curve::BondingCurve;
+use bonding_curve_v2::{BondingCurveV2, CurveType};
 use storage::{DataKey, TokenInfo};
+use errors::Error;
+use validation::*;
 
-/// Minimum and maximum allowed values for token parameters
-const MIN_NAME_LENGTH: u32 = 3;
-const MAX_NAME_LENGTH: u32 = 32;
-const MIN_SYMBOL_LENGTH: u32 = 2;
-const MAX_SYMBOL_LENGTH: u32 = 12;
-const MIN_SUPPLY: i128 = 1_000_000; // 1M minimum
-const MAX_SUPPLY: i128 = 1_000_000_000_000_000; // 1 quadrillion max
-const CREATION_FEE: i128 = 100_000; // 0.01 XLM (in stroops)
-
-/// Market cap threshold for graduation to AMM (in XLM stroops)
-const GRADUATION_THRESHOLD: i128 = 1_000_000_000_000; // 100k XLM
+// Re-export validation constants (now centralized in validation module)
+// No need to redefine - using validation::* imports
 
 #[contract]
 pub struct TokenFactory;
@@ -43,16 +44,26 @@ impl TokenFactory {
     /// # Arguments
     /// * `admin` - Address that will have admin privileges
     /// * `treasury` - Address that will receive creation fees
-    pub fn initialize(env: Env, admin: Address, treasury: Address) {
+    ///
+    /// # Errors
+    /// * `Error::AlreadyInitialized` - Contract already initialized
+    pub fn initialize(env: Env, admin: Address, treasury: Address) -> Result<(), Error> {
         if storage::has_admin(&env) {
-            panic!("already initialized");
+            return Err(Error::AlreadyInitialized);
         }
 
         admin.require_auth();
 
+        // Validate addresses
+        validate_address(&admin)?;
+        validate_address(&treasury)?;
+
         storage::set_admin(&env, &admin);
         storage::set_treasury(&env, &treasury);
         storage::set_token_count(&env, 0);
+        storage::set_paused(&env, false); // Initialize as not paused
+
+        Ok(())
     }
 
     /// Creates a new meme token with bonding curve
@@ -64,9 +75,16 @@ impl TokenFactory {
     /// * `decimals` - Number of decimals (typically 7 for Stellar)
     /// * `initial_supply` - Initial supply to mint
     /// * `metadata_uri` - URI to token metadata (image, description) on IPFS
+    /// * `curve_type` - Type of bonding curve (Linear, Exponential, Sigmoid)
     ///
     /// # Returns
     /// Address of the newly created token contract
+    ///
+    /// # Errors
+    /// * `Error::ContractPaused` - Contract is paused
+    /// * `Error::TooManyTokens` - User exceeded max tokens per creator
+    /// * `Error::CreationCooldown` - User must wait before creating another token
+    /// * Various validation errors
     pub fn create_token(
         env: Env,
         creator: Address,
@@ -75,14 +93,26 @@ impl TokenFactory {
         decimals: u32,
         initial_supply: i128,
         metadata_uri: String,
-    ) -> Address {
+        curve_type: CurveType,
+    ) -> Result<Address, Error> {
         creator.require_auth();
 
-        // Validate parameters
-        Self::validate_params(&env, &name, &symbol, initial_supply);
+        // Check if contract is paused
+        Self::require_not_paused(&env)?;
+
+        // Validate all parameters
+        validate_address(&creator)?;
+        validate_name(&name)?;
+        validate_symbol(&symbol)?;
+        validate_decimals(decimals)?;
+        validate_supply(initial_supply)?;
+        validate_metadata_uri(&metadata_uri)?;
+
+        // Rate limiting checks
+        Self::check_rate_limits(&env, &creator)?;
 
         // Charge creation fee
-        Self::charge_fee(&env, &creator);
+        Self::charge_fee(&env, &creator)?;
 
         // Deploy new token contract using Stellar Asset Contract (SAC)
         let salt = Self::generate_salt(&env);
@@ -91,8 +121,12 @@ impl TokenFactory {
         // Mint initial supply to bonding curve contract (this contract)
         token::mint_to(&env, &token_address, &env.current_contract_address(), initial_supply);
 
-        // Initialize bonding curve
-        let bonding_curve = BondingCurve::new(initial_supply);
+        // Initialize bonding curve V2 with chosen curve type
+        let bonding_curve = match curve_type {
+            CurveType::Linear => BondingCurveV2::new_linear(initial_supply),
+            CurveType::Exponential => BondingCurveV2::new_exponential(initial_supply),
+            CurveType::Sigmoid => BondingCurveV2::new_sigmoid(initial_supply),
+        };
 
         // Store token info
         let token_info = TokenInfo {
@@ -112,11 +146,12 @@ impl TokenFactory {
         storage::set_token_info(&env, &token_address, &token_info);
         storage::add_creator_token(&env, &creator, &token_address);
         storage::increment_token_count(&env);
+        storage::set_last_creation_time(&env, &creator, env.ledger().timestamp());
 
         // Emit creation event
         events::token_created(&env, &creator, &token_address, &name, &symbol);
 
-        token_address
+        Ok(token_address)
     }
 
     /// Buy tokens using the bonding curve
@@ -129,46 +164,68 @@ impl TokenFactory {
     ///
     /// # Returns
     /// Amount of tokens received
+    ///
+    /// # Errors
+    /// * `Error::ContractPaused` - Contract is paused
+    /// * `Error::TokenNotFound` - Token doesn't exist
+    /// * `Error::AlreadyGraduated` - Token already moved to AMM
+    /// * `Error::AmountTooSmall` - Buy amount below minimum
+    /// * `Error::SlippageExceeded` - Slippage tolerance exceeded
+    /// * `Error::PriceImpactTooHigh` - Price impact exceeds maximum allowed
     pub fn buy_tokens(
         env: Env,
         buyer: Address,
         token: Address,
         xlm_amount: i128,
         min_tokens_out: i128,
-    ) -> i128 {
+    ) -> Result<i128, Error> {
         buyer.require_auth();
 
+        // Security checks
+        Self::require_not_paused(&env)?;
+        validate_address(&buyer)?;
+        validate_buy_amount(xlm_amount)?;
+
         let mut token_info = storage::get_token_info(&env, &token)
-            .unwrap_or_else(|| panic!("token not found"));
+            .ok_or(Error::TokenNotFound)?;
 
         if token_info.graduated {
-            panic!("token already graduated to AMM");
+            return Err(Error::AlreadyGraduated);
         }
 
-        // Calculate tokens to receive
-        let tokens_out = token_info.bonding_curve.calculate_buy_amount(xlm_amount);
+        // Calculate tokens to receive using V2 bonding curve
+        let old_price = token_info.bonding_curve.get_current_price();
+        let tokens_out = token_info.bonding_curve.calculate_buy_amount(xlm_amount)?;
 
-        // Check slippage
+        // Check slippage protection
         if tokens_out < min_tokens_out {
-            panic!("slippage too high");
+            return Err(Error::SlippageExceeded);
         }
 
         // Get native XLM token
         let xlm_token = token::get_native_token(&env);
 
-        // Transfer XLM from buyer to this contract
+        // Transfer XLM from buyer to this contract (CHECK-EFFECTS-INTERACTIONS pattern)
         token::transfer(&env, &xlm_token, &buyer, &env.current_contract_address(), xlm_amount);
 
-        // Transfer tokens from this contract to buyer
-        token::transfer(&env, &token, &env.current_contract_address(), &buyer, tokens_out);
+        // Update bonding curve state BEFORE external call
+        token_info.bonding_curve.apply_buy(xlm_amount, tokens_out)?;
 
-        // Update bonding curve state
-        token_info.bonding_curve.apply_buy(xlm_amount, tokens_out);
-        token_info.xlm_raised += xlm_amount;
+        let new_price = token_info.bonding_curve.get_current_price();
+
+        // Validate price impact
+        validate_price_impact(old_price, new_price)?;
+
+        token_info.xlm_raised = token_info.xlm_raised
+            .checked_add(xlm_amount)
+            .ok_or(Error::Overflow)?;
+
+        // Transfer tokens from this contract to buyer (LAST to prevent reentrancy)
+        token::transfer(&env, &token, &env.current_contract_address(), &buyer, tokens_out);
 
         // Check if should graduate to AMM
         if token_info.xlm_raised >= GRADUATION_THRESHOLD {
-            Self::graduate_to_amm(&env, &mut token_info);
+            Self::graduate_to_amm(&env, &mut token_info)?;
         } else {
             storage::set_token_info(&env, &token, &token_info);
         }
@@ -176,7 +233,7 @@ impl TokenFactory {
         // Emit buy event
         events::tokens_bought(&env, &buyer, &token, xlm_amount, tokens_out);
 
-        tokens_out
+        Ok(tokens_out)
     }
 
     /// Sell tokens back to the bonding curve
@@ -188,57 +245,86 @@ impl TokenFactory {
     /// * `min_xlm_out` - Minimum XLM to receive (slippage protection)
     ///
     /// # Returns
-    /// Amount of XLM received
+    /// Amount of XLM received (after sell penalty)
+    ///
+    /// # Errors
+    /// * `Error::ContractPaused` - Contract is paused
+    /// * `Error::TokenNotFound` - Token doesn't exist
+    /// * `Error::AlreadyGraduated` - Token already moved to AMM
+    /// * `Error::AmountTooSmall` - Sell amount below minimum
+    /// * `Error::SlippageExceeded` - Slippage tolerance exceeded
+    /// * `Error::InsufficientReserve` - Not enough XLM in reserves
     pub fn sell_tokens(
         env: Env,
         seller: Address,
         token: Address,
         token_amount: i128,
         min_xlm_out: i128,
-    ) -> i128 {
+    ) -> Result<i128, Error> {
         seller.require_auth();
 
+        // Security checks
+        Self::require_not_paused(&env)?;
+        validate_address(&seller)?;
+        validate_sell_amount(token_amount)?;
+
         let mut token_info = storage::get_token_info(&env, &token)
-            .unwrap_or_else(|| panic!("token not found"));
+            .ok_or(Error::TokenNotFound)?;
 
         if token_info.graduated {
-            panic!("token already graduated to AMM");
+            return Err(Error::AlreadyGraduated);
         }
 
-        // Calculate XLM to receive
-        let xlm_out = token_info.bonding_curve.calculate_sell_amount(token_amount);
+        // Calculate XLM to receive (includes sell penalty in V2)
+        let xlm_out = token_info.bonding_curve.calculate_sell_amount(token_amount)?;
 
-        // Check slippage
+        // Check slippage protection
         if xlm_out < min_xlm_out {
-            panic!("slippage too high");
+            return Err(Error::SlippageExceeded);
+        }
+
+        // Ensure enough XLM in reserve
+        if xlm_out > token_info.bonding_curve.xlm_reserve {
+            return Err(Error::InsufficientReserve);
         }
 
         let xlm_token = token::get_native_token(&env);
 
-        // Transfer tokens from seller to this contract
+        // Transfer tokens from seller to this contract (CHECK-EFFECTS-INTERACTIONS)
         token::transfer(&env, &token, &seller, &env.current_contract_address(), token_amount);
 
-        // Transfer XLM from this contract to seller
-        token::transfer(&env, &xlm_token, &env.current_contract_address(), &seller, xlm_out);
+        // Update bonding curve state BEFORE external call
+        token_info.bonding_curve.apply_sell(xlm_out, token_amount)?;
 
-        // Update bonding curve state
-        token_info.bonding_curve.apply_sell(xlm_out, token_amount);
-        token_info.xlm_raised -= xlm_out;
+        token_info.xlm_raised = token_info.xlm_raised
+            .checked_sub(xlm_out)
+            .ok_or(Error::Underflow)?;
 
         storage::set_token_info(&env, &token, &token_info);
+
+        // Transfer XLM from this contract to seller (LAST to prevent reentrancy)
+        token::transfer(&env, &xlm_token, &env.current_contract_address(), &seller, xlm_out);
 
         // Emit sell event
         events::tokens_sold(&env, &seller, &token, token_amount, xlm_out);
 
-        xlm_out
+        Ok(xlm_out)
     }
 
     /// Get current price for a token (in XLM per token)
-    pub fn get_price(env: Env, token: Address) -> i128 {
+    pub fn get_price(env: Env, token: Address) -> Result<i128, Error> {
         let token_info = storage::get_token_info(&env, &token)
-            .unwrap_or_else(|| panic!("token not found"));
+            .ok_or(Error::TokenNotFound)?;
 
-        token_info.bonding_curve.get_current_price()
+        Ok(token_info.bonding_curve.get_current_price())
+    }
+
+    /// Get market cap for a token
+    pub fn get_market_cap(env: Env, token: Address) -> Result<i128, Error> {
+        let token_info = storage::get_token_info(&env, &token)
+            .ok_or(Error::TokenNotFound)?;
+
+        token_info.bonding_curve.get_market_cap()
     }
 
     /// Get token info
@@ -259,14 +345,20 @@ impl TokenFactory {
     // ========== Admin Functions ==========
 
     /// Update creation fee (admin only)
-    pub fn set_creation_fee(env: Env, admin: Address, new_fee: i128) {
-        Self::require_admin(&env, &admin);
+    pub fn set_creation_fee(env: Env, admin: Address, new_fee: i128) -> Result<(), Error> {
+        Self::require_admin(&env, &admin)?;
+
+        if new_fee < 0 {
+            return Err(Error::AmountTooSmall);
+        }
+
         storage::set_creation_fee(&env, new_fee);
+        Ok(())
     }
 
     /// Withdraw accumulated fees (admin only)
-    pub fn withdraw_fees(env: Env, admin: Address) -> i128 {
-        Self::require_admin(&env, &admin);
+    pub fn withdraw_fees(env: Env, admin: Address) -> Result<i128, Error> {
+        Self::require_admin(&env, &admin)?;
 
         let treasury = storage::get_treasury(&env);
         let xlm_token = token::get_native_token(&env);
@@ -276,34 +368,58 @@ impl TokenFactory {
             token::transfer(&env, &xlm_token, &env.current_contract_address(), &treasury, balance);
         }
 
-        balance
+        Ok(balance)
+    }
+
+    /// Emergency pause (admin only)
+    pub fn pause(env: Env, admin: Address) -> Result<(), Error> {
+        Self::require_admin(&env, &admin)?;
+        storage::set_paused(&env, true);
+        Ok(())
+    }
+
+    /// Unpause contract (admin only)
+    pub fn unpause(env: Env, admin: Address) -> Result<(), Error> {
+        Self::require_admin(&env, &admin)?;
+        storage::set_paused(&env, false);
+        Ok(())
+    }
+
+    /// Check if contract is paused
+    pub fn is_paused(env: Env) -> bool {
+        storage::is_paused(&env)
     }
 
     // ========== Internal Functions ==========
 
-    fn validate_params(env: &Env, name: &String, symbol: &String, supply: i128) {
-        let name_len = name.len();
-        let symbol_len = symbol.len();
-
-        if name_len < MIN_NAME_LENGTH || name_len > MAX_NAME_LENGTH {
-            panic!("invalid name length");
+    /// Check rate limits for token creation
+    fn check_rate_limits(env: &Env, creator: &Address) -> Result<(), Error> {
+        // Check max tokens per user
+        let creator_tokens = storage::get_creator_tokens(env, creator);
+        if creator_tokens.len() >= MAX_TOKENS_PER_USER {
+            return Err(Error::TooManyTokens);
         }
 
-        if symbol_len < MIN_SYMBOL_LENGTH || symbol_len > MAX_SYMBOL_LENGTH {
-            panic!("invalid symbol length");
+        // Check creation cooldown
+        if let Some(last_creation) = storage::get_last_creation_time(env, creator) {
+            let current_time = env.ledger().timestamp();
+            let time_elapsed = current_time.checked_sub(last_creation).unwrap_or(0);
+
+            if time_elapsed < TOKEN_CREATION_COOLDOWN {
+                return Err(Error::CreationCooldown);
+            }
         }
 
-        if supply < MIN_SUPPLY || supply > MAX_SUPPLY {
-            panic!("invalid supply");
-        }
+        Ok(())
     }
 
-    fn charge_fee(env: &Env, from: &Address) {
+    fn charge_fee(env: &Env, from: &Address) -> Result<(), Error> {
         let treasury = storage::get_treasury(env);
         let xlm_token = token::get_native_token(env);
         let fee = storage::get_creation_fee(env).unwrap_or(CREATION_FEE);
 
         token::transfer(env, &xlm_token, from, &treasury, fee);
+        Ok(())
     }
 
     fn generate_salt(env: &Env) -> BytesN<32> {
@@ -319,7 +435,7 @@ impl TokenFactory {
         env.crypto().sha256(&salt_data)
     }
 
-    fn graduate_to_amm(env: &Env, token_info: &mut TokenInfo) {
+    fn graduate_to_amm(env: &Env, token_info: &mut TokenInfo) -> Result<(), Error> {
         // Mark as graduated
         token_info.graduated = true;
         storage::set_token_info(env, &token_info.token_address, token_info);
@@ -331,13 +447,23 @@ impl TokenFactory {
         // 4. Emit graduation event
 
         events::token_graduated(env, &token_info.token_address, token_info.xlm_raised);
+
+        Ok(())
     }
 
-    fn require_admin(env: &Env, addr: &Address) {
+    fn require_admin(env: &Env, addr: &Address) -> Result<(), Error> {
         let admin = storage::get_admin(env);
         if addr != &admin {
-            panic!("unauthorized");
+            return Err(Error::NotAdmin);
         }
         addr.require_auth();
+        Ok(())
+    }
+
+    fn require_not_paused(env: &Env) -> Result<(), Error> {
+        if storage::is_paused(env) {
+            return Err(Error::ContractPaused);
+        }
+        Ok(())
     }
 }

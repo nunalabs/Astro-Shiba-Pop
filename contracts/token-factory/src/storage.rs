@@ -1,6 +1,6 @@
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
-use crate::bonding_curve::BondingCurve;
+use crate::bonding_curve_v2::BondingCurveV2;
 
 /// Storage keys for the contract
 #[contracttype]
@@ -18,6 +18,10 @@ pub enum DataKey {
     TokenInfo(Address),
     /// Tokens created by an address
     CreatorTokens(Address),
+    /// Contract paused state
+    Paused,
+    /// Last token creation time by creator
+    LastCreationTime(Address),
 }
 
 /// Information about a created token
@@ -40,8 +44,8 @@ pub struct TokenInfo {
     pub metadata_uri: String,
     /// Creation timestamp
     pub created_at: u64,
-    /// Bonding curve state
-    pub bonding_curve: BondingCurve,
+    /// Bonding curve V2 state (with multiple curve types)
+    pub bonding_curve: BondingCurveV2,
     /// Whether token has graduated to AMM
     pub graduated: bool,
     /// Total XLM raised
@@ -130,4 +134,29 @@ pub fn get_creator_tokens(env: &Env, creator: &Address) -> Vec<Address> {
         .persistent()
         .get(&key)
         .unwrap_or(Vec::new(env))
+}
+
+// Pause state functions
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().instance().set(&DataKey::Paused, &paused);
+}
+
+pub fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::Paused)
+        .unwrap_or(false)
+}
+
+// Rate limiting functions
+pub fn set_last_creation_time(env: &Env, creator: &Address, timestamp: u64) {
+    env.storage()
+        .temporary()
+        .set(&DataKey::LastCreationTime(creator.clone()), &timestamp);
+}
+
+pub fn get_last_creation_time(env: &Env, creator: &Address) -> Option<u64> {
+    env.storage()
+        .temporary()
+        .get(&DataKey::LastCreationTime(creator.clone()))
 }

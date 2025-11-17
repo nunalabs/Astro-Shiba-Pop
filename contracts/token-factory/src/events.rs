@@ -9,8 +9,8 @@ pub fn token_created(
     symbol: &String,
 ) {
     env.events().publish(
-        (symbol_short!("created"),),
-        (creator, token_address, name, symbol),
+        (symbol_short!("created"), creator, token_address),
+        (name.clone(), symbol.clone()),
     );
 }
 
