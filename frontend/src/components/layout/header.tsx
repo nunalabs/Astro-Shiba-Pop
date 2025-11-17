@@ -1,13 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { Button } from '@/components/ui/button';
-import { useWallet } from '@/lib/wallet/wallet-provider';
-import { formatAddress } from '@/lib/utils';
-import { Rocket, Wallet } from 'lucide-react';
+import { Rocket } from 'lucide-react';
+import { WalletButton } from '@/components/wallet/wallet-button';
 
 export function Header() {
-  const { address, isConnected, connect, disconnect } = useWallet();
 
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -53,19 +50,7 @@ export function Header() {
         </nav>
 
         {/* Wallet Connection */}
-        <div className="flex items-center space-x-4">
-          {isConnected && address ? (
-            <Button variant="outline" onClick={disconnect}>
-              <Wallet className="mr-2 h-4 w-4" />
-              {formatAddress(address)}
-            </Button>
-          ) : (
-            <Button onClick={connect}>
-              <Wallet className="mr-2 h-4 w-4" />
-              Connect Wallet
-            </Button>
-          )}
-        </div>
+        <WalletButton />
       </div>
     </header>
   );
